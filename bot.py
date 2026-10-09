@@ -4,7 +4,9 @@ import time
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
+from filters import IsModerator, IsAdmin
 from database import init_db, save_user, get_user
+from database import save_chat, set_role, remove_role, get_role, get_chat_roles
 
 from config import BOT_TOKEN
 
@@ -29,7 +31,10 @@ async def cmd_help(message: Message):
         "/ping — проверить скорость\n"
         "/id — узнать свой ID и ID чата\n"
         "/info — инфа о тебе\n"
-        "/me — твоя статистика",
+        "/setrole — установить роль\n"
+        "/unsetrole — снять роль\n"
+        "/roles — просмотр ролей\n"
+        "/myrole — посмотреть свою роль",
         parse_mode="Markdown"
     )
 
@@ -92,19 +97,89 @@ async def cmd_me(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
+@router.message(Command("setrole"), IsAdmin())
+async def cmd_setrole(message: Message):
+    if message.reply_to_message is None:
+        await message.answer("Ответь на сообщение юзера, которому даёшь роль.")
+        return
+
+    # парсим аргумент: /setrole moderator
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Формат: `/setrole moderator` (в reply)", parse_mode="Markdown")
+        return
+
+    role = parts[1].strip().lower()
+    if role not in ("moderator", "admin"):
+        await message.answer("Роль может быть: `moderator` или `admin`", parse_mode="Markdown")
+        return
+
+    target = message.reply_to_message.from_user
+    if target.is_bot:
+        await message.answer("Ботам роли не выдаём.")
+        return
+
+    await set_role(message.chat.id, target.id, role, message.from_user.id)
+    await message.answer(f"✅ {target.full_name} теперь **{role}**", parse_mode="Markdown")
+
+
+@router.message(Command("unsetrole"), IsAdmin())
+async def cmd_unsetrole(message: Message):
+    if message.reply_to_message is None:
+        await message.answer("Ответь на сообщение юзера.")
+        return
+
+    target = message.reply_to_message.from_user
+    await remove_role(message.chat.id, target.id)
+    await message.answer(f"✅ Роль снята с {target.full_name}")
+
+
+@router.message(Command("roles"))
+async def cmd_roles(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        await message.answer("Команда только для групп.")
+        return
+
+    roles = await get_chat_roles(message.chat.id)
+    if not roles:
+        await message.answer("В этом чате нет назначенных ролей.")
+        return
+
+    text = "👥 **Роли в чате:**\n\n"
+    for r in roles:
+        name = r["first_name"] or "Без имени"
+        username = f" (@{r['username']})" if r["username"] else ""
+        emoji = "🛡" if r["role"] == "admin" else "⚔️"
+        text += f"{emoji} {name}{username} — {r['role']}\n"
+
+    await message.answer(text, parse_mode="Markdown")
+
+
+@router.message(Command("myrole"))
+async def cmd_myrole(message: Message):
+    if message.chat.type not in ("group", "supergroup"):
+        await message.answer("Команда только для групп.")
+        return
+
+    role = await get_role(message.chat.id, message.from_user.id)
+    if role is None:
+        role = "user (по умолчанию)"
+    await message.answer(f"Твоя роль здесь: **{role}**", parse_mode="Markdown")
+
 @router.message()
 async def track_user(message: Message):
-    """Ловит любое сообщение и сохраняет юзера."""
-    if message.from_user is None:
+    if message.from_user is None or message.from_user.is_bot:
         return
-    if message.from_user.is_bot:
-        return  # ботов не считаем
 
     await save_user(
         user_id=message.from_user.id,
         username=message.from_user.username,
         first_name=message.from_user.first_name,
     )
+
+    # сохраняем чат если это группа/супергруппа
+    if message.chat.type in ("group", "supergroup"):
+        await save_chat(message.chat.id, message.chat.title or "Без названия")
 
 if __name__ == "__main__":
     asyncio.run(main())
