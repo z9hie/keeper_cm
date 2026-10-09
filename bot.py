@@ -4,6 +4,7 @@ import time
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
+from database import init_db, save_user, get_user
 
 from config import BOT_TOKEN
 
@@ -27,11 +28,13 @@ async def cmd_help(message: Message):
         "/help — это сообщение\n"
         "/ping — проверить скорость\n"
         "/id — узнать свой ID и ID чата\n"
-        "/info — инфа о тебе",
+        "/info — инфа о тебе\n"
+        "/me — твоя статистика",
         parse_mode="Markdown"
     )
 
 async def main():
+    await init_db()          # ← новая строка
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
@@ -71,6 +74,37 @@ async def cmd_info(message: Message):
     text += f"⭐ Premium: {'да' if u.is_premium else 'нет'}\n"
     text += f"🤖 Бот: {'да' if u.is_bot else 'нет'}"
     await message.answer(text, parse_mode="Markdown")
+
+@router.message(Command("me"))
+async def cmd_me(message: Message):
+    user = await get_user(message.from_user.id)
+    if user is None:
+        await message.answer("Я тебя ещё не знаю. Напиши что-нибудь!")
+        return
+
+    first_seen = user["first_seen"][:10]  # только дата
+    text = (
+        f"📊 **Твоя статистика**\n\n"
+        f"👤 {user['first_name']}\n"
+        f"🆔 `{user['user_id']}`\n"
+        f"💬 Сообщений: **{user['message_count']}**\n"
+        f"📅 Первое сообщение: {first_seen}"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+@router.message()
+async def track_user(message: Message):
+    """Ловит любое сообщение и сохраняет юзера."""
+    if message.from_user is None:
+        return
+    if message.from_user.is_bot:
+        return  # ботов не считаем
+
+    await save_user(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name,
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
